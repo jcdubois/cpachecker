@@ -57,7 +57,7 @@
     "angular-sanitize": "^1.8.2",
     "bootstrap": "^4.6.0",
     "code-prettify": "^0.1.0",
-    "datatables.net": "^1.10.24",
+    "datatables.net": "^1.11.3",
     "datatables.net-dt": "^1.10.24",
     "jquery": "^3.6.0",
     "jquery-ui-dist": "^1.12.1",
