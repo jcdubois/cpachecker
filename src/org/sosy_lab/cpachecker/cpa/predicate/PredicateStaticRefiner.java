@@ -13,7 +13,6 @@ import static org.sosy_lab.cpachecker.cpa.arg.ARGUtils.getAllStatesOnPathsTo;
 import com.google.common.base.Predicates;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ImmutableSetMultimap;
 import com.google.common.collect.LinkedHashMultimap;
 import com.google.common.collect.Multimap;
@@ -30,6 +29,7 @@ import java.util.Deque;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.logging.Level;
 import org.sosy_lab.common.ShutdownNotifier;
@@ -202,7 +202,6 @@ public class PredicateStaticRefiner extends StaticRefiner
     // We don't need to care about creating extra predicates for branching etc.
     boolean branchingOccurred = true;
     if (elementsOnPath.size() == allStatesTrace.size()) {
-      elementsOnPath = ImmutableSet.of();
       branchingOccurred = false;
     }
 
@@ -213,17 +212,13 @@ public class PredicateStaticRefiner extends StaticRefiner
     BlockFormulas formulas =
         blockFormulaStrategy.getFormulasForPath(
             allStatesTrace.getFirstState(), abstractionStatesTrace);
-    if (!formulas.hasBranchingFormula()) {
-      @SuppressWarnings("deprecation")
-      // remove once PathChecker#handleFeasibleCounterexample does not need it anymore
-      BooleanFormula branchingFormula = pathFormulaManager.buildBranchingFormula(elementsOnPath);
-      formulas = formulas.withBranchingFormula(branchingFormula);
-    }
 
     CounterexampleTraceInfo counterexample;
     satCheckTime.start();
     try {
-      counterexample = itpManager.buildCounterexampleTraceWithoutInterpolation(formulas);
+      counterexample =
+          itpManager.buildCounterexampleTraceWithoutInterpolation(
+              formulas, Optional.of(allStatesTrace));
     } finally {
       satCheckTime.stop();
     }
