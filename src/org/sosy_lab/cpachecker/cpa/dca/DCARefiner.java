@@ -38,6 +38,7 @@ import java.util.logging.Level;
 import java.util.stream.Collectors;
 import org.sosy_lab.common.MoreStrings;
 import org.sosy_lab.common.ShutdownNotifier;
+import org.sosy_lab.common.collect.Collections3;
 import org.sosy_lab.common.configuration.Configuration;
 import org.sosy_lab.common.configuration.FileOption;
 import org.sosy_lab.common.configuration.InvalidConfigurationException;
@@ -521,7 +522,7 @@ public class DCARefiner implements Refiner, StatisticsProvider, AutoCloseable {
                         stemAndLoopStates, PredicateAbstractState::getPredicateState),
                     Optional.of(stemAndLoopPath));
             CounterexampleInfo cexInfo =
-                pathChecker.createCounterexample(stemAndLoopPath, cexTraceInfo);
+                pathChecker.handleFeasibleCounterexample(cexTraceInfo, stemAndLoopPath);
 
             stemAndLoopPath.getLastState().addCounterexampleInformation(cexInfo);
             // return false;
@@ -616,7 +617,7 @@ public class DCARefiner implements Refiner, StatisticsProvider, AutoCloseable {
                 transformedImmutableListCopy(
                     path.asStatesList(), PredicateAbstractState::getPredicateState),
                 Optional.of(path));
-        CounterexampleInfo cexInfo = pathChecker.createCounterexample(path, cexTraceInfo);
+        CounterexampleInfo cexInfo = pathChecker.handleFeasibleCounterexample(cexTraceInfo, path);
 
         path.getLastState().addCounterexampleInformation(cexInfo);
         return false;
@@ -656,11 +657,12 @@ public class DCARefiner implements Refiner, StatisticsProvider, AutoCloseable {
 
   private boolean refineFinitePrefixes(ARGPath pPath, List<PathFormula> pPathFormulaList)
       throws CPAException, InterruptedException {
-    CounterexampleTraceInfo cexTraceInfo =
-        interpolationManager.buildCounterexampleTrace(
-            BlockFormulas.createFromPathFormulas(pPathFormulaList));
-
-    List<BooleanFormula> interpolants = cexTraceInfo.getInterpolants();
+    List<BooleanFormula> interpolants =
+        interpolationManager
+            .interpolate(
+                Collections3.transformedImmutableListCopy(
+                    pPathFormulaList, PathFormula::getFormula))
+            .orElseThrow();
     logger.logf(
         Level.FINE,
         "Mapping of interpolants to arg-states:\n%s",

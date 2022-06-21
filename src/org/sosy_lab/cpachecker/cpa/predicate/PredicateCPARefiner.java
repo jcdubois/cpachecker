@@ -9,7 +9,6 @@
 package org.sosy_lab.cpachecker.cpa.predicate;
 
 import static com.google.common.collect.FluentIterable.from;
-import static org.sosy_lab.cpachecker.cpa.arg.ARGUtils.getAllStatesOnPathsTo;
 import static org.sosy_lab.cpachecker.util.AbstractStates.extractLocation;
 import static org.sosy_lab.cpachecker.util.AbstractStates.extractOptionalCallstackWraper;
 import static org.sosy_lab.cpachecker.util.statistics.StatisticsWriter.writingStatisticsTo;
@@ -134,7 +133,7 @@ public class PredicateCPARefiner implements ARGBasedRefiner, StatisticsProvider 
   private final StatTimer prefixExtractionTime =
       new StatTimer("Extracting infeasible sliced prefixes");
 
-  private final StatTimer errorPathProcessing = new StatTimer("Error path post-processing");
+  private final StatTimer errorPathProcessing = new StatTimer("Error-path post-processing");
   private final StatTimer getFormulasForPathTime = new StatTimer("Path-formulas extraction");
 
   private final StatInt totalPrefixes =
@@ -228,19 +227,6 @@ public class PredicateCPARefiner implements ARGBasedRefiner, StatisticsProvider 
             + " strategy.");
   }
 
-  /**
-   * Extracts the elements on the given path. If no branching/merging occured the returned Set is
-   * empty.
-   */
-  private Set<ARGState> extractElementsOnPath(final ARGPath path) {
-    Set<ARGState> elementsOnPath = getAllStatesOnPathsTo(path.getLastState());
-
-    assert elementsOnPath.containsAll(path.getStateSet());
-    assert elementsOnPath.size() >= path.size();
-
-    return elementsOnPath;
-  }
-
   /** Create list of formulas on path. */
   private BlockFormulas createFormulasOnPath(
       final ARGPath allStatesTrace, final List<ARGState> abstractionStatesTrace)
@@ -271,7 +257,6 @@ public class PredicateCPARefiner implements ARGBasedRefiner, StatisticsProvider 
       BlockFormulas formulas;
       final boolean repeatedCounterexample;
       List<ARGState> abstractionStatesTrace;
-      boolean branchingOccurred;
       ImmutableList<CFANode> errorPath =
           allStatesTrace.asStatesList().stream()
               .map(AbstractStates::extractLocation)
@@ -279,15 +264,6 @@ public class PredicateCPARefiner implements ARGBasedRefiner, StatisticsProvider 
               .collect(ImmutableList.toImmutableList());
       repeatedCounterexample = lastErrorPaths.contains(errorPath);
       lastErrorPaths.add(errorPath);
-
-      Set<ARGState> elementsOnPath = extractElementsOnPath(allStatesTrace);
-      // No branches/merges in path, it is precise.
-      // We don't need to care about creating extra predicates for branching etc.
-      branchingOccurred = true;
-      if (elementsOnPath.size() == allStatesTrace.size()
-          && !containsBranchingInPath(elementsOnPath)) {
-        branchingOccurred = false;
-      }
 
       // create path with all abstraction location elements (excluding the initial element)
       // the last element is the element corresponding to the error location
@@ -335,8 +311,7 @@ public class PredicateCPARefiner implements ARGBasedRefiner, StatisticsProvider 
         logger.log(Level.FINEST, "Error trace is not spurious");
         errorPathProcessing.start();
         try {
-          return pathChecker.handleFeasibleCounterexample(
-              allStatesTrace, counterexample, branchingOccurred);
+          return pathChecker.handleFeasibleCounterexample(counterexample, allStatesTrace);
         } finally {
           errorPathProcessing.stop();
         }
@@ -345,27 +320,6 @@ public class PredicateCPARefiner implements ARGBasedRefiner, StatisticsProvider 
     } finally {
       totalRefinement.stop();
     }
-  }
-
-  /**
-   * Check whether the path contains states A, B, C with successor relations A->B, B->C, A->C.
-   * Branching like this would not be detected otherwise.
-   */
-  private boolean containsBranchingInPath(Set<ARGState> pElementsOnPath) {
-    for (ARGState state : pElementsOnPath) {
-      boolean alreadyFoundOneChild = false;
-      for (ARGState child : state.getChildren()) {
-        if (pElementsOnPath.contains(child)) {
-          if (alreadyFoundOneChild) {
-            // already found another child in the path, second child must be a branching.
-            return true;
-          } else {
-            alreadyFoundOneChild = true;
-          }
-        }
-      }
-    }
-    return false;
   }
 
   /**
@@ -681,19 +635,19 @@ public class PredicateCPARefiner implements ARGBasedRefiner, StatisticsProvider 
 
       int numberOfRefinements = totalRefinement.getUpdateCount();
       w0.put("Number of predicate refinements", totalRefinement.getUpdateCount());
+      StatisticsWriter w1 = w0.beginLevel();
       if (numberOfRefinements > 0) {
         w0.put(totalPathLength).put(totalPrefixes).spacer().put(totalRefinement);
-
-        StatisticsWriter w1 = w0.beginLevel();
-        interpolationManager.printStatistics(w1);
 
         w1.put(getFormulasForPathTime);
         if (isRefinementSelectionEnabled()) {
           w1.put(prefixExtractionTime);
           w1.put(prefixSelectionTime);
         }
-        w1.put(errorPathProcessing);
       }
+
+      interpolationManager.printStatistics(w1);
+      w1.putIfUpdatedAtLeastOnce(errorPathProcessing);
     }
 
     @Override
