@@ -286,6 +286,9 @@ class ASTConverter {
             // https://gcc.gnu.org/onlinedocs/gcc-12.1.0/gcc/Microsoft-Windows-Function-Attributes.html
             .put("dllexport", Optional.empty())
             .put("dllimport", Optional.empty())
+            // This attribute is only available in the OpenBSD fork of GCC. See
+            // https://man.openbsd.org/gcc-local.1
+            .put("bounded", Optional.empty())
             .buildOrThrow();
   }
 
@@ -692,10 +695,12 @@ class ASTConverter {
       resultType = ((CArrayType) resultType).getType();
     } else if (resultType instanceof CPointerType) {
       resultType = ((CPointerType) resultType).getType();
-    } else {
+    } else if (resultType instanceof CTypedefType || resultType instanceof CProblemType) {
       // TODO probably we should throw exception,
       // but for now we delegate to Eclipse CDT and see whether it knows better than we do
       resultType = typeConverter.convert(e.getExpressionType());
+    } else {
+      throw parseContext.parseError("Array subscript for non-array type " + resultType, e);
     }
 
     return new CArraySubscriptExpression(getLocation(e), resultType, arrayExpr, subscriptExpr);
