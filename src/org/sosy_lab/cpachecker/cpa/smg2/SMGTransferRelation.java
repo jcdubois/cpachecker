@@ -403,17 +403,13 @@ public class SMGTransferRelation
 
   private List<SMGState> createVariableOnTheSpotForPreviousStackframe(
       CExpression leftHandSideExpr, SMGState pState) throws CPATransferException {
+    // TODO: move this method to the state
     // Remove top stackframe
     PersistentStack<StackFrame> completeStack = pState.getMemoryModel().getStackFrames();
     StackFrame topStackframe = completeStack.peek();
     PersistentStack<StackFrame> stackWOTop = completeStack.popAndCopy();
     SMGState tempState =
-        SMGState.of(
-            machineModel,
-            pState.getMemoryModel().withNewStackFrame(stackWOTop),
-            logger,
-            options,
-            pState.getErrorInfo());
+        pState.copyAndReplaceMemoryModel(pState.getMemoryModel().withNewStackFrame(stackWOTop));
 
     // Create variable on the stack below
     ImmutableList.Builder<SMGState> returnListBuilder = ImmutableList.builder();
@@ -422,12 +418,8 @@ public class SMGTransferRelation
       PersistentStack<StackFrame> incompleteStack = stateWVar.getMemoryModel().getStackFrames();
       PersistentStack<StackFrame> newCompleteStack = incompleteStack.pushAndCopy(topStackframe);
       returnListBuilder.add(
-          SMGState.of(
-              machineModel,
-              stateWVar.getMemoryModel().withNewStackFrame(newCompleteStack),
-              logger,
-              options,
-              stateWVar.getErrorInfo()));
+          stateWVar.copyAndReplaceMemoryModel(
+              stateWVar.getMemoryModel().withNewStackFrame(newCompleteStack)));
     }
     return returnListBuilder.build();
   }
@@ -613,7 +605,7 @@ public class SMGTransferRelation
       CType cParamType,
       CFAEdge callEdge,
       SMGState pCurrentState)
-      throws SMGException {
+      throws CPATransferException {
     SMGState currentState = pCurrentState;
     if (valueType instanceof CArrayType && cParamType instanceof CArrayType) {
       // Take the pointer to the local array and get the memory area, then associate this memory
@@ -738,7 +730,7 @@ public class SMGTransferRelation
           for (SMGState stateWithConstraint : statesWithConstraints) {
             if (options.isSatCheckStrategyAtAssume()) {
               BooleanAndSMGState solverResult = solver.isUnsat(stateWithConstraint, functionName);
-              if (solverResult.getBoolean()) {
+              if (!solverResult.getBoolean()) {
                 resultStateBuilder.add(solverResult.getState());
               }
               // We might add/return nothing here if the check was UNSAT
@@ -1107,7 +1099,7 @@ public class SMGTransferRelation
       CType rightHandSideType,
       SMGState pCurrentState,
       CFAEdge edge)
-      throws SMGException {
+      throws CPATransferException {
     SMGState currentState = pCurrentState;
 
     // Size of the left hand side as vv.evaluate() casts automatically to this type
