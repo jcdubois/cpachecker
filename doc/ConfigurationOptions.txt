@@ -3063,8 +3063,8 @@ cpa.smg2.castMemoryAddressesToNumeric = false
 # function returns, and not only at the end of the main function
 cpa.smg2.checkForMemLeaksAtEveryFrameDrop = true
 
-# Crash on unknown array dereferences
-cpa.smg2.crashOnUnknown = false
+# Crash on unknown value when creating constraints of any form.
+cpa.smg2.crashOnUnknownInConstraint = false
 
 # Deallocation functions
 cpa.smg2.deallocationFunctions = {"free"}
@@ -3113,7 +3113,7 @@ cpa.smg2.handleUnknownFunctions = STRICT
 # If this option is enabled, a memory allocation (e.g. malloc or array
 # declaration) for unknown memory sizes does not abort, but also does not
 # create any memory.
-cpa.smg2.handleUnknownMemoryAllocation = IGNORE
+cpa.smg2.handleUnknownMemoryAllocation = STOP_ANALYSIS
   enum:     [IGNORE, MEMORY_ERROR, STOP_ANALYSIS]
 
 # if there is an assumption like (x!=0), this option sets unknown

@@ -196,9 +196,9 @@ public class SMGOptions {
 
   @Option(
       secure = true,
-      name = "crashOnUnknown",
-      description = "Crash on unknown array dereferences")
-  private boolean crashOnUnknown = false;
+      name = "crashOnUnknownInConstraint",
+      description = "Crash on unknown value when creating constraints of any form.")
+  private boolean crashOnUnknownInConstraint = false;
 
   @Option(
       secure = true,
@@ -289,7 +289,7 @@ public class SMGOptions {
           "If this option is enabled, a memory allocation (e.g. malloc or array declaration) for "
               + "unknown memory sizes does not abort, but also does not create any memory.")
   private UnknownMemoryAllocationHandling handleUnknownMemoryAllocation =
-      UnknownMemoryAllocationHandling.IGNORE;
+      UnknownMemoryAllocationHandling.STOP_ANALYSIS;
 
   /*
    * Ignore: ignore allocation call and overapproximate.
@@ -472,8 +472,8 @@ public class SMGOptions {
     return joinOnBlockEnd;
   }
 
-  public boolean crashOnUnknown() {
-    return crashOnUnknown;
+  public boolean crashOnUnknownInConstraint() {
+    return crashOnUnknownInConstraint;
   }
 
   boolean isAssignEqualityAssumptions() {
