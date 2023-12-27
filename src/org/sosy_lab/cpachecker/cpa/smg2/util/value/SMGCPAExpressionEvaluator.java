@@ -13,7 +13,6 @@ import com.google.common.collect.ImmutableList;
 import java.math.BigInteger;
 import java.util.Collection;
 import java.util.List;
-import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Optional;
 import java.util.logging.Level;
@@ -412,8 +411,10 @@ public class SMGCPAExpressionEvaluator {
       SMGObject target = objectAndOffsetOrState.getSMGObject();
       Value offset = objectAndOffsetOrState.getOffsetForObject();
       if (!offset.isNumericValue()) {
-        resultBuilder.add(ValueAndSMGState.ofUnknownValue(objectAndOffsetOrState.getSMGState()));
-        continue;
+        // TODO: support symbolic offsets in the SMG
+        throw new SMGException("Symbolic offsets can currently not be saved in the SMG");
+        // resultBuilder.add(ValueAndSMGState.ofUnknownValue(objectAndOffsetOrState.getSMGState()));
+        // continue;
       }
       // search for existing pointer first and return if found; else make a new one
       ValueAndSMGState addressAndState =
@@ -481,7 +482,7 @@ public class SMGCPAExpressionEvaluator {
     return returnBuilder.build();
   }
 
-  private ValueAndSMGState searchOrCreatePointer(
+  public ValueAndSMGState searchOrCreatePointer(
       SMGObject targetObject, BigInteger offsetInBits, SMGState pState) {
     return pState.searchOrCreateAddress(targetObject, offsetInBits);
   }
@@ -982,7 +983,7 @@ public class SMGCPAExpressionEvaluator {
    */
   private ValueAndSMGState readValueWithoutMaterialization(
       SMGState currentState, SMGObject object, Value offsetValueInBits, BigInteger sizeInBits)
-      throws SMGSolverException {
+      throws SMGSolverException, SMGException {
     // TODO: this can be refacored with readValue, so that the checks are 1 method
 
     if (offsetValueInBits.isNumericValue()) {
@@ -1058,6 +1059,9 @@ public class SMGCPAExpressionEvaluator {
       Collection<Constraint> newConstraints, String stackFrameFunctionName, SMGState currentState)
       throws SMGSolverException {
     // Iff SAT -> memory-safety is violated
+    // The constraints checked here should be lower and upper bound. They may not be checked at the
+    // same time!
+    // TODO: use both constraints in an OR
     for (Constraint constraint : newConstraints) {
       try {
         // If a constraint is trivial, its satisfiability is not influenced by other constraints.
@@ -1718,12 +1722,18 @@ public class SMGCPAExpressionEvaluator {
       throw new SMGException("Symbolic offset in copy of complete memory structure.");
     }
     BigInteger concreteLeftHandSideOffset = leftHandSideOffset.asNumericValue().bigIntegerValue();
+    BigInteger copySizeInBits = leftHandSideMemory.getSize().subtract(concreteLeftHandSideOffset);
+    BigInteger sourceCopySize = paramMemory.getSize().subtract(paramBaseOffset);
+    if (copySizeInBits.compareTo(sourceCopySize) > 0) {
+      copySizeInBits = sourceCopySize;
+    }
+    // TODO: this is most likely incorrect for nested structs without pointers
     return pState.copySMGObjectContentToSMGObject(
         paramMemory,
         new NumericValue(paramBaseOffset),
         leftHandSideMemory,
         leftHandSideOffset,
-        new NumericValue(leftHandSideMemory.getSize().subtract(concreteLeftHandSideOffset)));
+        new NumericValue(copySizeInBits));
   }
 
   /**
@@ -1954,7 +1964,7 @@ public class SMGCPAExpressionEvaluator {
         return handleInitializerList(
             pNewState, pVarDecl, pEdge, variableName, pOffset, arrayType, pNewInitializer);
       } else if (realCType instanceof CCompositeType structType) {
-        return handleInitializerList(
+        return handleInitializerListForComposites(
             pNewState, pVarDecl, pEdge, variableName, pOffset, structType, pNewInitializer);
       }
 
@@ -2022,7 +2032,7 @@ public class SMGCPAExpressionEvaluator {
    * Handles and inits, to the variable given, the given CInitializerList initializers.
    * In this case composite types like structs and unions.
    */
-  private List<SMGState> handleInitializerList(
+  private List<SMGState> handleInitializerListForComposites(
       SMGState pState,
       CVariableDeclaration pVarDecl,
       CFAEdge pEdge,
@@ -2034,44 +2044,52 @@ public class SMGCPAExpressionEvaluator {
 
     int listCounter = 0;
 
-    List<CCompositeType.CCompositeTypeMemberDeclaration> memberTypes = pLValueType.getMembers();
-    // Member -> offset map
-    Map<CCompositeType.CCompositeTypeMemberDeclaration, BigInteger> offsetAndPosition =
-        machineModel.getAllFieldOffsetsInBits(pLValueType);
+    List<CCompositeType.CCompositeTypeMemberDeclaration> memberDecls = pLValueType.getMembers();
 
     SMGState currentState = pState;
 
     for (CInitializer initializer : pNewInitializer.getInitializers()) {
       // TODO: this has to be checked with a test!!!!
-      CType memberType = memberTypes.get(0).getType();
-      if (initializer instanceof CDesignatedInitializer) {
+      Value offset = pOffset;
+      CType fieldType = null;
+      if (initializer instanceof CDesignatedInitializer designatedInittializer) {
         List<CDesignator> designators = ((CDesignatedInitializer) initializer).getDesignators();
-        initializer = ((CDesignatedInitializer) initializer).getRightHandSide();
+        initializer = designatedInittializer.getRightHandSide();
         Preconditions.checkArgument(designators.size() == 1);
+        String fieldName = ((CFieldDesignator) designators.get(0)).getFieldName();
 
-        for (CCompositeTypeMemberDeclaration memTypes : memberTypes) {
-          if (memTypes.getName().equals(((CFieldDesignator) designators.get(0)).getFieldName())) {
-            memberType = memTypes.getType();
+        listCounter = 0;
+        for (CCompositeType.CCompositeTypeMemberDeclaration memberNameAndType : memberDecls) {
+          if (memberNameAndType.getName().equals(fieldName)) {
+            fieldType = memberNameAndType.getType();
             break;
           }
+          listCounter++;
         }
-      } else {
-        memberType = memberTypes.get(listCounter).getType();
-      }
+        Preconditions.checkNotNull(fieldType);
 
-      // The offset is the base offset given + the current offset
-      Value offset =
-          addOffsetValues(
-              pOffset, new NumericValue(offsetAndPosition.get(memberTypes.get(listCounter))));
+        BigInteger fieldOffset = machineModel.getFieldOffsetInBits(pLValueType, fieldName);
+        Preconditions.checkNotNull(fieldOffset);
+        offset = addOffsetValues(offset, fieldOffset);
+
+      } else {
+        CCompositeTypeMemberDeclaration fieldDecl = memberDecls.get(listCounter);
+
+        BigInteger fieldOffset =
+            machineModel.getFieldOffsetInBits(pLValueType, fieldDecl.getName());
+        Preconditions.checkNotNull(fieldOffset);
+        offset = addOffsetValues(offset, fieldOffset);
+
+        fieldType = fieldDecl.getType();
+      }
 
       List<SMGState> newStates =
           handleInitializer(
-              currentState, pVarDecl, pEdge, variableName, offset, memberType, initializer);
+              currentState, pVarDecl, pEdge, variableName, offset, fieldType, initializer);
 
       // If this ever fails: branch into the new states and perform the rest of the loop on both!
       Preconditions.checkArgument(newStates.size() == 1);
       currentState = newStates.get(0);
-      // finalStates.addAll(newStates);
       listCounter++;
     }
     return ImmutableList.of(currentState);
@@ -2093,10 +2111,22 @@ public class SMGCPAExpressionEvaluator {
     CType memberType = SMGCPAExpressionEvaluator.getCanonicalType(pLValueType.getType());
     BigInteger memberTypeSize = getBitSizeof(pState, memberType);
 
-    // ImmutableList.Builder<SMGState> finalStates = ImmutableList.builder();
+    List<CInitializer> initList = pNewInitializer.getInitializers();
+    // The initilizerlist might exceed the memory allocated. In this case we cut off the rest of the
+    // initializer
+    // Also, the initializer might be smaller, in that case we pad 0
+    if (pVarDecl != null && pVarDecl.getType().getCanonicalType().hasKnownConstantSize()) {
+      BigInteger typeSize = machineModel.getSizeof(pVarDecl.getType().getCanonicalType());
+      int initializerSize = pNewInitializer.getInitializers().size();
+      if (typeSize.intValueExact() < initializerSize) {
+        initList = initList.subList(0, typeSize.intValueExact());
+      }
+      // TODO: handle smaller initializer lists
+    }
+
     SMGState currentState = pState;
     Value offset = pOffset;
-    for (CInitializer initializer : pNewInitializer.getInitializers()) {
+    for (CInitializer initializer : initList) {
       // TODO: this has to be checked with a test!!!!
       if (initializer instanceof CDesignatedInitializer) {
         initializer = ((CDesignatedInitializer) initializer).getRightHandSide();
@@ -2128,16 +2158,6 @@ public class SMGCPAExpressionEvaluator {
   public String getCStringLiteralExpressionVairableName(
       CStringLiteralExpression pCStringLiteralExpression) {
     return "_" + pCStringLiteralExpression.getContentWithoutNullTerminator() + "_STRING_LITERAL";
-    /*
-    WHY did i do this?!
-          // If the var exists we change the name and create a new one
-      // (Don't reuse an old variable! They might be different from the new one!)
-      int num = 0;
-      while (pState.isGlobalVariablePresent(stringVarName + num)) {
-        num++;
-      }
-      stringVarName += num;
-     */
   }
 
   /*

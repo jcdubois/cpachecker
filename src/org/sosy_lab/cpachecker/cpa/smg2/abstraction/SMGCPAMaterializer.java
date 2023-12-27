@@ -108,7 +108,9 @@ public class SMGCPAMaterializer {
         currentState.writeValueWithoutChecks(prevObj, nfo, pointerSize, nextPointerValue);
     // We can assume that a 0+ does not have other valid pointers to it!
     // Remove all other pointers/subgraphs associated with the 0+ object
+    // currentState = currentState.prunePointerValueTargets(pListSeg, ImmutableSet.of(nfo));
     // Also remove the object
+    // TODO: merge prunePointerValueTargets into copyAndRemoveObjectAndAssociatedSubSMG
     currentState =
         currentState.copyAndReplaceMemoryModel(
             currentState.getMemoryModel().copyAndRemoveObjectAndAssociatedSubSMG(pListSeg));
@@ -159,7 +161,9 @@ public class SMGCPAMaterializer {
         currentState.writeValueWithoutChecks(prevObj, nfo, pointerSize, nextPointerValue);
     // We can assume that a 0+ does not have other valid pointers to it!
     // Remove all other pointers/subgraphs associated with the 0+ object
+    // currentState = currentState.prunePointerValueTargets(pListSeg, ImmutableSet.of(nfo));
     // Also remove the object
+    // TODO: merge prunePointerValueTargets into copyAndRemoveObjectAndAssociatedSubSMG
     currentState =
         currentState.copyAndReplaceMemoryModel(
             currentState.getMemoryModel().copyAndRemoveObjectAndAssociatedSubSMG(pListSeg));
@@ -196,6 +200,16 @@ public class SMGCPAMaterializer {
 
     // Add all values. next pointer is wrong here!
     currentState = currentState.copyAllValuesFromObjToObj(pListSeg, newConcreteRegion);
+    // Check all not nfo values if they are pointers, if they are, we need to copy their targets and
+    // insert a new pointer to the copy
+    // -2 in the nesting lvl as we have not decremented the sll yet
+    /*
+    currentState =
+        currentState.copyMemoryNotOriginatingFrom(
+            newConcreteRegion,
+            ImmutableSet.of(nfo),
+            Integer.max(pListSeg.getMinLength() - 2, MINIMUM_LIST_LENGTH));
+            */
 
     // Create the now smaller abstracted list
     SMGSinglyLinkedListSegment newAbsListSeg =
@@ -286,6 +300,12 @@ public class SMGCPAMaterializer {
 
     // Add all values. next pointer is wrong here!
     currentState = currentState.copyAllValuesFromObjToObj(pListSeg, newConcreteRegion);
+    // Check all not nfo values if they are pointers, if they are, we need to copy their targets and
+    // insert a new pointer to the copy
+
+    // TODO: Then we need to check for pointers towards the old target and switch pointers with the
+    // correct nesting level to this new pointer
+
     // Replace the pointer behind the value pointing to the abstract region with a pointer to the
     // new object
     // We don't change the nesting level of the pointers! We switch only those with new nesting
@@ -391,7 +411,8 @@ public class SMGCPAMaterializer {
 
   // Check that the pointers of a list are correct
   private boolean checkPointersOfMaterializedDLL(
-      SMGObject newConcreteRegion, BigInteger nfo, BigInteger pfo, SMGState state) {
+      SMGObject newConcreteRegion, BigInteger nfo, BigInteger pfo, SMGState state)
+      throws SMGException {
     BigInteger pointerSize = state.getMemoryModel().getSizeOfPointer();
     SMGValueAndSMGState nextPointerAndState =
         state.readSMGValue(newConcreteRegion, nfo, pointerSize);
@@ -452,7 +473,7 @@ public class SMGCPAMaterializer {
   }
 
   private boolean checkPointersOfMaterializedSLL(
-      SMGObject newConcreteRegion, BigInteger nfo, SMGState state) {
+      SMGObject newConcreteRegion, BigInteger nfo, SMGState state) throws SMGException {
     BigInteger pointerSize = state.getMemoryModel().getSizeOfPointer();
     SMGValueAndSMGState nextPointerAndState =
         state.readSMGValue(newConcreteRegion, nfo, pointerSize);
@@ -483,7 +504,8 @@ public class SMGCPAMaterializer {
 
   // Expects the list of expected objects in listOfObjects in the correct order for the offset
   private boolean checkList(
-      SMGObject start, BigInteger pointerOffset, List<SMGObject> listOfObjects, SMGState state) {
+      SMGObject start, BigInteger pointerOffset, List<SMGObject> listOfObjects, SMGState state)
+      throws SMGException {
     SMGObject currentObj = start;
     BigInteger pointerSize = state.getMemoryModel().getSizeOfPointer();
 
