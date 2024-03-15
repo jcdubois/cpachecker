@@ -30,7 +30,7 @@ import org.sosy_lab.cpachecker.cfa.model.CFAEdge;
 import org.sosy_lab.cpachecker.cfa.types.c.CFunctionType;
 import org.sosy_lab.cpachecker.cfa.types.c.CType;
 import org.sosy_lab.cpachecker.cpa.smg2.util.SMGException;
-import org.sosy_lab.cpachecker.cpa.smg2.util.SMGObjectAndOffset;
+import org.sosy_lab.cpachecker.cpa.smg2.util.SMGObjectAndOffsetMaybeNestingLvl;
 import org.sosy_lab.cpachecker.cpa.smg2.util.SMGStateAndOptionalSMGObjectAndOffset;
 import org.sosy_lab.cpachecker.cpa.smg2.util.value.SMGCPAExpressionEvaluator;
 import org.sosy_lab.cpachecker.cpa.smg2.util.value.ValueAndSMGState;
@@ -110,7 +110,8 @@ public class SMGCPAAddressVisitor
     String globalVarName = evaluator.getCStringLiteralExpressionVairableName(e);
     SMGState currentState = state;
     if (!currentState.isGlobalVariablePresent(globalVarName)) {
-      BigInteger sizeOfString = evaluator.getBitSizeof(currentState, e.getExpressionType());
+      Value sizeOfString =
+          new NumericValue(evaluator.getBitSizeof(currentState, e.getExpressionType()));
       currentState =
           currentState.copyAndAddGlobalVariable(sizeOfString, globalVarName, e.getExpressionType());
       List<SMGState> statesWithString =
@@ -257,7 +258,7 @@ public class SMGCPAAddressVisitor
         }
       }
 
-      Optional<SMGObjectAndOffset> maybeTarget =
+      Optional<SMGObjectAndOffsetMaybeNestingLvl> maybeTarget =
           evaluator.getTargetObjectAndOffset(pCurrentState, qualifiedVarName, finalOffset);
 
       return SMGStateAndOptionalSMGObjectAndOffset.of(pCurrentState, maybeTarget);
@@ -334,7 +335,7 @@ public class SMGCPAAddressVisitor
         Value baseOffset = new NumericValue(BigInteger.valueOf(variableAndOffset.getOffset()));
         Value finalFieldOffset = SMGCPAExpressionEvaluator.addOffsetValues(baseOffset, fieldOffset);
 
-        Optional<SMGObjectAndOffset> maybeTarget =
+        Optional<SMGObjectAndOffsetMaybeNestingLvl> maybeTarget =
             evaluator.getTargetObjectAndOffset(currentState, varName, finalFieldOffset);
 
         resultBuilder.add(SMGStateAndOptionalSMGObjectAndOffset.of(currentState, maybeTarget));
@@ -362,7 +363,7 @@ public class SMGCPAAddressVisitor
       // The var was not declared
       throw new SMGException("Usage of undeclared variable: " + e.getName() + ".");
     }
-    Optional<SMGObjectAndOffset> maybeTarget =
+    Optional<SMGObjectAndOffsetMaybeNestingLvl> maybeTarget =
         evaluator.getTargetObjectAndOffset(state, varDecl.getQualifiedName());
     if (maybeTarget.isPresent()) {
       return ImmutableList.of(

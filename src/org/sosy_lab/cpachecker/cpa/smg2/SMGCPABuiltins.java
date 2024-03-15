@@ -21,8 +21,10 @@ import java.util.regex.Pattern;
 import org.sosy_lab.common.UniqueIdGenerator;
 import org.sosy_lab.common.collect.Collections3;
 import org.sosy_lab.common.log.LogManagerWithoutDuplicates;
+import org.sosy_lab.cpachecker.cfa.ast.c.CArraySubscriptExpression;
 import org.sosy_lab.cpachecker.cfa.ast.c.CCastExpression;
 import org.sosy_lab.cpachecker.cfa.ast.c.CExpression;
+import org.sosy_lab.cpachecker.cfa.ast.c.CFieldReference;
 import org.sosy_lab.cpachecker.cfa.ast.c.CFunctionCallExpression;
 import org.sosy_lab.cpachecker.cfa.ast.c.CIdExpression;
 import org.sosy_lab.cpachecker.cfa.ast.c.CParameterDeclaration;
@@ -326,7 +328,7 @@ public class SMGCPABuiltins {
         currentState.writeToStackOrGlobalVariable(
             destIdArg.getDeclaration().getQualifiedName(),
             new NumericValue(BigInteger.ZERO),
-            sizeInBits,
+            new NumericValue(sizeInBits),
             addressAndState.getValue(),
             destIdArg.getExpressionType(),
             pCfaEdge);
@@ -387,14 +389,14 @@ public class SMGCPABuiltins {
           paramDecl.getType(),
           secondArg.getExpressionType());
     }
-    BigInteger sizeInBitsPointer = evaluator.getBitSizeof(pState, firstArg);
+    Value sizeInBitsPointer = new NumericValue(evaluator.getBitSizeof(pState, firstArg));
 
     BigInteger sizeInBitsVarArg = evaluator.getBitSizeof(pState, secondArg);
     BigInteger overallSizeOfVarArgs =
         BigInteger.valueOf(currentStack.getVariableArguments().size()).multiply(sizeInBitsVarArg);
 
     ValueAndSMGState pointerAndState =
-        evaluator.createHeapMemoryAndPointer(currentState, overallSizeOfVarArgs);
+        evaluator.createHeapMemoryAndPointer(currentState, new NumericValue(overallSizeOfVarArgs));
 
     currentState = pointerAndState.getState();
     Value address = pointerAndState.getValue();
@@ -424,7 +426,7 @@ public class SMGCPABuiltins {
           currentState.writeValueTo(
               address,
               offset,
-              sizeInBitsVarArg,
+              new NumericValue(sizeInBitsVarArg),
               varArg,
               SMGCPAExpressionEvaluator.getCanonicalType(secondArg),
               cfaEdge);
@@ -454,7 +456,9 @@ public class SMGCPABuiltins {
     // to avoid invalid-derefs like   int * p; printf("%d", *p);
     SMGState currentState = pState;
     for (CExpression param : cFCExpression.getParameterExpressions()) {
-      if (param instanceof CPointerExpression) {
+      if (param instanceof CPointerExpression
+          || param instanceof CFieldReference
+          || param instanceof CArraySubscriptExpression) {
         SMGCPAValueVisitor valueVisitor =
             new SMGCPAValueVisitor(evaluator, currentState, pCfaEdge, logger, options);
         for (ValueAndSMGState valueAndState : param.accept(valueVisitor)) {
@@ -733,7 +737,8 @@ public class SMGCPABuiltins {
           sizeValue.asNumericValue().bigIntegerValue().multiply(BigInteger.valueOf(8));
 
       resultBuilder.addAll(
-          handleConfigurableMemoryAllocation(functionCall, currentState, sizeInBits, cfaEdge));
+          handleConfigurableMemoryAllocation(
+              functionCall, currentState, new NumericValue(sizeInBits), cfaEdge));
     }
 
     return resultBuilder.build();
@@ -741,32 +746,38 @@ public class SMGCPABuiltins {
 
   // malloc(size) w size in bits
   private ImmutableList<ValueAndSMGState> handleConfigurableMemoryAllocation(
-      CFunctionCallExpression functionCall, SMGState pState, BigInteger sizeInBits, CFAEdge edge)
+      CFunctionCallExpression functionCall, SMGState pState, Value sizeInBits, CFAEdge edge)
       throws SMGException, SMGSolverException {
     ImmutableList.Builder<ValueAndSMGState> resultBuilder = ImmutableList.builder();
     SMGState currentState = pState;
     String functionName = functionCall.getFunctionNameExpression().toASTString();
+    if (sizeInBits.isNumericValue()) {
 
-    if (sizeInBits.compareTo(BigInteger.ZERO) == 0) {
-      resultBuilder.add(handleAllocZero(currentState));
-      return resultBuilder.build();
+      BigInteger numericSizeInBits = sizeInBits.asNumericValue().bigIntegerValue();
+      if (numericSizeInBits.compareTo(BigInteger.ZERO) == 0) {
+        resultBuilder.add(handleAllocZero(currentState));
+        return resultBuilder.build();
+      }
+
+      // Create a new memory region with the specified size and use the pointer to its beginning
+      // from now on
+      ValueAndSMGState addressAndState =
+          evaluator.createHeapMemoryAndPointer(currentState, sizeInBits);
+      Value addressToNewRegion = addressAndState.getValue();
+      SMGState stateWithNewHeap = addressAndState.getState();
+
+      if (options.getZeroingMemoryAllocation().contains(functionName)) {
+        // Since this is newly created memory get(0) is fine
+        stateWithNewHeap =
+            stateWithNewHeap
+                .writeToZero(addressToNewRegion, functionCall.getExpressionType(), edge)
+                .get(0);
+      }
+      resultBuilder.add(ValueAndSMGState.of(addressToNewRegion, stateWithNewHeap));
+    } else {
+      // Symbolic size
+      throw new SMGException(functionCall + " Tried to allocate symbolic memory.");
     }
-
-    // Create a new memory region with the specified size and use the pointer to its beginning
-    // from now on
-    ValueAndSMGState addressAndState =
-        evaluator.createHeapMemoryAndPointer(currentState, sizeInBits);
-    Value addressToNewRegion = addressAndState.getValue();
-    SMGState stateWithNewHeap = addressAndState.getState();
-
-    if (options.getZeroingMemoryAllocation().contains(functionName)) {
-      // Since this is newly created memory get(0) is fine
-      stateWithNewHeap =
-          stateWithNewHeap
-              .writeToZero(addressToNewRegion, functionCall.getExpressionType(), edge)
-              .get(0);
-    }
-    resultBuilder.add(ValueAndSMGState.of(addressToNewRegion, stateWithNewHeap));
 
     // If malloc can fail (and fails) it simply returns a pointer to 0 (C also sets errno)
     if (options.isEnableMallocFailure()) {
@@ -787,7 +798,8 @@ public class SMGCPABuiltins {
       return ValueAndSMGState.of(addressToZero, currentState);
     } else {
       // Some size, does not matter
-      return evaluator.createMallocZeroMemoryAndPointer(currentState, BigInteger.ONE);
+      return evaluator.createMallocZeroMemoryAndPointer(
+          currentState, new NumericValue(BigInteger.ONE));
     }
   }
 
@@ -955,7 +967,7 @@ public class SMGCPABuiltins {
               .writeValueTo(
                   bufferMemoryAddress,
                   bufferOffsetInBits,
-                  sizeOfCharInBits.multiply(BigInteger.valueOf(count)),
+                  new NumericValue(sizeOfCharInBits.multiply(BigInteger.valueOf(count))),
                   charValue,
                   CNumericTypes.CHAR,
                   cfaEdge)
@@ -968,7 +980,7 @@ public class SMGCPABuiltins {
                 .writeValueTo(
                     bufferMemoryAddress,
                     bufferOffsetInBits.add(BigInteger.valueOf(c).multiply(sizeOfCharInBits)),
-                    sizeOfCharInBits,
+                    new NumericValue(sizeOfCharInBits),
                     charValue,
                     CNumericTypes.CHAR,
                     cfaEdge)
@@ -1084,27 +1096,15 @@ public class SMGCPABuiltins {
   private List<ValueAndSMGState> evaluateAlloca(
       SMGState pState, Value pSizeValue, CType type, @SuppressWarnings("unused") CFAEdge cfaEdge)
       throws CPATransferException {
-    // Since the size comes from getAllocateFunctionParameter we know that unknown values may be
-    // replaced by guesses if enabled
+    Value sizeInBits =
+        SMGCPAExpressionEvaluator.multiplyOffsetValues(pSizeValue, BigInteger.valueOf(8));
 
-    ImmutableList.Builder<ValueAndSMGState> resultBuilder = ImmutableList.builder();
-    SMGState currentState = pState;
-    if (!pSizeValue.isNumericValue()) {
-      resultBuilder.add(ValueAndSMGState.ofUnknownValue(currentState));
-    } else {
-      String allocationLabel = "_ALLOCA_ID_" + U_ID_GENERATOR.getFreshId();
-      ValueAndSMGState addressValueAndState =
-          evaluator.createStackAllocation(
-              allocationLabel,
-              pSizeValue.asNumericValue().bigIntegerValue().multiply(BigInteger.valueOf(8)),
-              type,
-              pState);
+    String allocationLabel = "_ALLOCA_ID_" + U_ID_GENERATOR.getFreshId();
+    ValueAndSMGState addressValueAndState =
+        evaluator.createStackAllocation(allocationLabel, sizeInBits, type, pState);
 
-      currentState = addressValueAndState.getState();
-
-      resultBuilder.add(ValueAndSMGState.of(addressValueAndState.getValue(), currentState));
-    }
-    return resultBuilder.build();
+    return ImmutableList.of(
+        ValueAndSMGState.of(addressValueAndState.getValue(), addressValueAndState.getState()));
   }
 
   /**
@@ -1426,7 +1426,8 @@ public class SMGCPABuiltins {
       BigInteger targetOffset,
       SMGObject sourceAddress,
       BigInteger sourceOffset,
-      Value numOfBytesToCopy) {
+      Value numOfBytesToCopy)
+      throws SMGException {
 
     Preconditions.checkArgument(numOfBytesToCopy instanceof NumericValue);
     long numOfBytes = numOfBytesToCopy.asNumericValue().bigIntegerValue().longValue();
@@ -1442,16 +1443,28 @@ public class SMGCPABuiltins {
         BigInteger.valueOf(numOfBytes)
             .multiply(BigInteger.valueOf(machineModel.getSizeofCharInBits()));
 
+    Value sourceAddressSize = sourceAddress.getSize();
+    Value targetAddressSize = targetAddress.getSize();
+
+    if (!sourceAddressSize.isNumericValue() || !targetAddressSize.isNumericValue()) {
+      throw new SMGException("Symbolic memory size in memset currently not supported.");
+    }
+    BigInteger numericSourceAddressSize = sourceAddressSize.asNumericValue().bigIntegerValue();
+    BigInteger numericTargetAddressSize = targetAddressSize.asNumericValue().bigIntegerValue();
     // There can be deref errors if the size is to large
-    if (sourceAddress.getSize().compareTo(sourceOffset.add(sizeToCopyInBits)) < 0) {
+    if (numericSourceAddressSize.compareTo(sourceOffset.add(sizeToCopyInBits)) < 0) {
       return ValueAndSMGState.ofUnknownValue(pState.withInvalidRead(sourceAddress));
-    } else if (targetAddress.getSize().compareTo(targetOffset.add(sizeToCopyInBits)) < 0) {
+    } else if (numericTargetAddressSize.compareTo(targetOffset.add(sizeToCopyInBits)) < 0) {
       return ValueAndSMGState.ofUnknownValue(pState.withInvalidWrite(targetAddress));
     }
 
     SMGState copyResultState =
         pState.copySMGObjectContentToSMGObject(
-            sourceAddress, sourceOffset, targetAddress, targetOffset, sizeToCopyInBits);
+            sourceAddress,
+            new NumericValue(sourceOffset),
+            targetAddress,
+            new NumericValue(targetOffset),
+            new NumericValue(sizeToCopyInBits));
 
     ValueAndSMGState newPointersAndStates =
         evaluator.searchOrCreatePointer(targetAddress, targetOffset, copyResultState);
@@ -1623,8 +1636,9 @@ public class SMGCPABuiltins {
 
     SMGState currentState = pState;
     ImmutableList.Builder<ValueAndSMGState> resultBuilder = ImmutableList.builder();
-    BigInteger sizeInBits =
-        pSizeValue.asNumericValue().bigIntegerValue().multiply(BigInteger.valueOf(8));
+    Value sizeInBits =
+        new NumericValue(
+            pSizeValue.asNumericValue().bigIntegerValue().multiply(BigInteger.valueOf(8)));
     // Handle (realloc(0, size) -> just malloc
     if (pPtrValue.isNumericValue()
         && pPtrValue.asNumericValue().bigIntegerValue().equals(BigInteger.ZERO)) {
@@ -1632,7 +1646,8 @@ public class SMGCPABuiltins {
     }
 
     // Handle realloc(ptr, 0) (before C23), (C23 its just undefined beh)
-    if (pSizeValue.isNumericValue() && sizeInBits.equals(BigInteger.ZERO)) {
+    if (pSizeValue.isNumericValue()
+        && sizeInBits.asNumericValue().bigIntegerValue().equals(BigInteger.ZERO)) {
       resultBuilder = ImmutableList.builder();
       for (SMGState freedState : currentState.free(pPtrValue, functionCall, pCfaEdge)) {
         resultBuilder.add(handleAllocZero(freedState));
@@ -1655,14 +1670,16 @@ public class SMGCPABuiltins {
               .orElseThrow()
               .getSMGObject();
       // The copy is always the lesser size of the 2
-      BigInteger oldSize =
-          oldObj
-              .getSMGObject()
-              .getSize()
-              .subtract(oldObj.getOffsetForObject().asNumericValue().bigIntegerValue());
-      BigInteger copySizeInBits = sizeInBits;
-      if (oldSize.compareTo(copySizeInBits) < 0) {
-        copySizeInBits = oldSize;
+      Value oldSize =
+          SMGCPAExpressionEvaluator.subtractOffsetValues(
+              oldObj.getSMGObject().getSize(), oldObj.getOffsetForObject());
+
+      if (!oldSize.isNumericValue()) {
+        throw new SMGException("Symbolic memory size in realloc() currently not supported.");
+      }
+      BigInteger copySizeInBits = sizeInBits.asNumericValue().bigIntegerValue();
+      if (oldSize.asNumericValue().bigIntegerValue().compareTo(copySizeInBits) < 0) {
+        copySizeInBits = oldSize.asNumericValue().bigIntegerValue();
       }
       // free old memory
       currentState =
