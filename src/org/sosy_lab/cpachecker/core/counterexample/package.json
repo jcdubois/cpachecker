@@ -55,7 +55,7 @@
     "@fortawesome/fontawesome-free": "^5.15.4",
     "angular": "^1.8.2",
     "angular-sanitize": "^1.8.2",
-    "bootstrap": "^4.6.1",
+    "bootstrap": "^5.0.0",
     "buffer": "^6.0.3",
     "code-prettify": "^0.1.0",
     "datatables.net": "^1.11.4",
